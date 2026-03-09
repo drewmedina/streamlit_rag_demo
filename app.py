@@ -9,7 +9,7 @@ from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer
 
 EMBED_MODEL = "all-MiniLM-L6-v2"
-GEN_MODEL = "llama3-8b-8192"
+GEN_MODEL = "llama-3.1-8b-instant"
 
 def read_file(file_path: Path) -> str:
     if file_path.suffix.lower() == ".pdf":
