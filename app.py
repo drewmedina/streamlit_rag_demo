@@ -79,14 +79,15 @@ def retrieve(query, embedder, index, chunks, meta, top_k=4):
     return results
 
 
-def generate_answer(query, results):
-    context = "\n\n".join(
-        f"[Source {i+1}: {r['source']} | chunk {r['chunk_id']}]\n{r['text']}"
-        for i, r in enumerate(results)
-    )
+def generate_answer(query, results=None):
+    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-    prompt = f"""
-Answer the question using only the context below.
+    if results:
+        context = "\n\n".join(
+            f"[Source {i+1}: {r['source']} | chunk {r['chunk_id']}]\n{r['text']}"
+            for i, r in enumerate(results)
+        )
+        prompt = f"""Answer the question using only the context below.
 
 Question:
 {query}
@@ -94,10 +95,10 @@ Question:
 Context:
 {context}
 
-If the answer is not present, say so clearly.
-"""
+If the answer is not present in the context, say so clearly."""
+    else:
+        prompt = query
 
-    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
     response = client.chat.completions.create(
         model=GEN_MODEL,
         messages=[{"role": "user", "content": prompt}],
@@ -105,32 +106,65 @@ If the answer is not present, say so clearly.
     return response.choices[0].message.content
 
 
+# ── UI ──────────────────────────────────────────────────────────────────────
+
 st.title("Student RAG Demo")
 
 uploaded_files = st.file_uploader(
-    "Upload your documents",
+    "Upload documents (optional — upload files to ground answers in your content)",
     type=["pdf", "txt", "md"],
     accept_multiple_files=True,
 )
 
-question = st.text_input("Ask a question about your documents")
+question = st.text_input("Ask a question")
+ask = st.button("Ask", type="primary")
 
-if uploaded_files:
-    file_bytes_map = {f.name: f.getvalue() for f in uploaded_files}
+if ask and question:
+    if uploaded_files:
+        file_bytes_map = {f.name: f.getvalue() for f in uploaded_files}
 
-    with st.spinner("Building index (only runs once per file set)..."):
-        embedder, index, chunks, meta = build_rag(file_bytes_map)
+        with st.spinner("Building index (only runs once per file set)..."):
+            embedder, index, chunks, meta = build_rag(file_bytes_map)
 
-    st.success(f"Indexed {len(chunks)} chunks from {len(uploaded_files)} file(s).")
+        st.caption(f"Indexed {len(chunks)} chunks from {len(uploaded_files)} file(s).")
 
-    if question:
         results = retrieve(question, embedder, index, chunks, meta)
 
+        # ── Retrieved chunks ──────────────────────────────────────────────
         st.subheader("Retrieved Chunks")
-        for r in results:
-            st.write(f"**{r['source']}** (chunk {r['chunk_id']}, score={r['score']:.3f})")
-            st.write(r["text"])
+        st.caption(
+            "When you upload documents, the text is split into overlapping **chunks** "
+            "and converted into numeric vectors (embeddings) that capture meaning. "
+            "When you ask a question, the most semantically similar chunks are retrieved "
+            "and handed to the LLM as context — this is **Retrieval-Augmented Generation (RAG)**."
+        )
+
+        for i, r in enumerate(results):
+            score_pct = int(r["score"] * 100)
+            # Color the badge: green ≥ 80, yellow ≥ 60, red below
+            if score_pct >= 80:
+                badge = f"🟢 {score_pct}% match"
+            elif score_pct >= 60:
+                badge = f"🟡 {score_pct}% match"
+            else:
+                badge = f"🔴 {score_pct}% match"
+
+            with st.expander(f"Chunk {i+1} — {r['source']}  ·  {badge}", expanded=(i == 0)):
+                col1, col2 = st.columns([1, 1])
+                col1.metric("Source", r["source"])
+                col2.metric("Chunk index", r["chunk_id"])
+                st.progress(r["score"], text=f"Similarity score: {r['score']:.3f}")
+                st.markdown("---")
+                st.markdown(r["text"])
 
         st.subheader("Answer")
         with st.spinner("Generating answer..."):
             st.write(generate_answer(question, results))
+
+    else:
+        st.subheader("Answer")
+        with st.spinner("Generating answer..."):
+            st.write(generate_answer(question))
+
+elif ask and not question:
+    st.warning("Please enter a question.")
